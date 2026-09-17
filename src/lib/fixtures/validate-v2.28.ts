@@ -1,4 +1,22 @@
-import { MEAL_TYPES, RECIPE_LIMITS, ROUTINE_LIMITS, type DayPlan, type IfThenEntry, type Settings, type SleepProfile, type SleepWindow, type Template, type ThemeState } from './types'
+/**
+ * The validation tables exactly as v2.28 shipped them, copied from
+ * validate.ts at 4e02c1c - its last change before rotating shifts - and never
+ * to be edited. An older device runs these on every plan sync hands it, and
+ * discards a plan that fails them whole: docs/RESEARCH-SHIFTS.md section 1.4.
+ * `olderValidate.test.ts` runs them over a plan with every field this
+ * version adds, so a change that would open an older device empty fails
+ * there first.
+ *
+ * Only the import paths differ from the original, and the two constants it
+ * read from types.ts are written in as they were.
+ */
+import type { DayPlan, IfThenEntry, Settings, SleepProfile, SleepWindow, Template, ThemeState } from '../types'
+
+// The two values v2.28 read from types.ts, frozen here as they were, so a
+// meal type or a limit added later cannot quietly make this older check
+// accept what the real older device refuses.
+const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'pre-gym', 'post-gym', 'snack'] as const
+const RECIPE_LIMITS = { kcal: 100_000, grams: 10_000, servings: 1_000, minutes: 100_000, cooked: 100_000 } as const
 
 /**
  * The shape a stored payload has to have before any of it is trusted.
@@ -234,8 +252,6 @@ const FROM_BLOCK = record({
   mealType: optional(oneOf(MEAL_TYPES)),
 })
 
-const FROM_ROUTINE = record({ time: optional(clockTime), minutes: wholeNumber(0, 1440) })
-
 const TASK = record({
   id: string,
   title: string,
@@ -256,11 +272,6 @@ const TASK = record({
   // dangle like every other; the meal has to be one Kitchen has.
   recipeId: optional(string),
   mealType: optional(oneOf(MEAL_TYPES)),
-  // A routine's task - rotating shifts, since v2.29. The id may dangle like
-  // every other; what the rule gave is a time on the clock or none, and a
-  // length.
-  routineId: optional(string),
-  fromRoutine: optional(FROM_ROUTINE),
   note: optional(string),
   templateNote: optional(string),
   fromBlock: optional(FROM_BLOCK),
@@ -315,10 +326,6 @@ const TEMPLATE_BLOCK = record({
   groupId: optional(string),
 })
 
-// A day template marked as a kind of day on the roster - rotating shifts,
-// since v2.29: a letter of one or two characters, and a whole-number order.
-const DAY_KIND_MARK = record({ letter: text(1, ROUTINE_LIMITS.letter), order: wholeNumber(0) })
-
 const WEEK_DAY_OVERRIDE = record({
   type: optional(oneOf(DAY_TYPES)),
   sleepProfileId: optional(string),
@@ -338,7 +345,6 @@ const TEMPLATE = record({
   kind: optional(oneOf(TEMPLATE_KINDS)),
   weekDays: optional(mapOf(k => typeof k === 'string' && /^[0-6]$/.test(k), WEEK_DAY_OVERRIDE)),
   sleepProfileId: optional(string),
-  dayKind: optional(DAY_KIND_MARK),
   tourCreated: optional(boolean),
 })
 
@@ -359,7 +365,6 @@ const DAY_PLAN = record({
   bestMoment: optional(string),
   dayType: optional(oneOf(DAY_TYPES)),
   repeatSkips: optional(listOf(string)),
-  routineSkips: optional(listOf(string)),
   autoApplied: optional(boolean),
   replannedOn: optional(string),
   // Free text since v2.5. A three-field journal from an older backup still
@@ -458,22 +463,6 @@ const PICTURE = record({ text: string })
 // so a hand-edited file cannot put a figure in a line no layout holds; the
 // grams may carry a decimal and kcal may too in a file, though the form
 // writes it whole. The count of times cooked is a count like any other.
-// Rotating shifts' routines, since v2.29: a title, a length from a minute to
-// twelve hours, each weekday at most once and at least one, and a time on the
-// clock for each kind it names - none at all is a routine still waiting for
-// its times, not a broken one.
-const weekdayList: Check = x =>
-  listOf(wholeNumber(0, 6))(x) && (x as number[]).length > 0 && new Set(x as number[]).size === (x as number[]).length
-
-const ROUTINE = record({
-  id: string,
-  title: text(1, ROUTINE_LIMITS.title),
-  category: categoryRef,
-  minutes: wholeNumber(1, ROUTINE_LIMITS.minutes),
-  weekdays: weekdayList,
-  times: mapOf(text(1, Number.POSITIVE_INFINITY), clockTime),
-})
-
 const RECIPE = record({
   id: string,
   title: string,
@@ -613,12 +602,11 @@ export interface StoredAppData {
   library?: AppDataLists['library']
   goals?: AppDataLists['goals']
   categories?: AppDataLists['categories']
-  picture?: import('./types').Picture
+  picture?: import('../types').Picture
   recipes?: AppDataLists['recipes']
-  routines?: AppDataLists['routines']
 }
 
-type AppDataLists = Pick<import('./types').AppData, 'inbox' | 'backlog' | 'scratch' | 'library' | 'goals' | 'categories' | 'recipes' | 'routines'>
+type AppDataLists = Pick<import('../types').AppData, 'inbox' | 'backlog' | 'scratch' | 'library' | 'goals' | 'categories' | 'recipes'>
 
 // Templates, days and settings are required: a payload without them is not
 // a plan. A shape check on those three alone once let {"templates":[{}],
@@ -638,7 +626,6 @@ const STORED_APP_DATA = record({
   categories: optional(listOf(CATEGORY)),
   picture: optional(PICTURE),
   recipes: optional(listOf(RECIPE)),
-  routines: optional(listOf(ROUTINE)),
 })
 
 export function validate(x: unknown): x is StoredAppData {
